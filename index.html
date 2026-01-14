@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Guide Face Auth Demo</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.6;
+      background-color: #f4f4f9;
+      color: #333;
+      margin: 0;
+      padding: 0;
+    }
+
+    header {
+      background-color: #4b6cb7;
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 20px auto;
+      padding: 20px;
+      background: white;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border-radius: 8px;
+    }
+
+    h1, h2, h3 {
+      color: #4b6cb7;
+    }
+
+    pre {
+      background: #eef0f5;
+      padding: 10px;
+      border-radius: 5px;
+      overflow-x: auto;
+    }
+
+    code {
+      font-family: monospace;
+      color: #d63384;
+    }
+
+    section {
+      margin-bottom: 30px;
+    }
+
+    a {
+      color: #4b6cb7;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .note {
+      background: #fff3cd;
+      border-left: 5px solid #ffeeba;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Guide d’apprentissage : Face Auth Demo avec Face API</h1>
+</header>
+
+<main>
+
+  <section>
+    <h2>1. Introduction</h2>
+    <p>Ce guide pas-à-pas vous montre comment créer une application de reconnaissance faciale avec <a href="https://justadudewhohacks.github.io/face-api.js/docs/index.html" target="_blank">Face API</a>, React et Node.js.</p>
+    <p>Vous allez apprendre à :</p>
+    <ul>
+      <li>Structurer un projet frontend/backend</li>
+      <li>Capturer la vidéo de la webcam</li>
+      <li>Extraire les descripteurs faciaux</li>
+      <li>Gérer l'inscription et la connexion des utilisateurs</li>
+      <li>Stocker les données dans MySQL</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. Architecture générale</h2>
+    <pre>
+face-auth-demo/
+│
+├── backend/
+│   ├── app.js
+│   └── package.json
+│
+└── frontend/
+    ├── src/
+    │   ├── api/api.js
+    │   ├── App.jsx
+    │   ├── main.jsx
+    │   ├── auth/Register.jsx
+    │   ├── auth/Login.jsx
+    │   └── dashboard/Profile.jsx
+    └── package.json
+
+── public/
+    └── models/
+        ├── ssd_mobilenetv1_model-weights_manifest.json
+        ├── ssd_mobilenetv1_model-shard1
+        ├── face_recognition_model-weights_manifest.json
+        └── face_recognition_model-shard1
+    </pre>
+    <p>Les modèles sont disponibles sur le repo officiel <a href="https://github.com/justadudewhohacks/face-api.js/tree/master/weights" target="_blank">Face API Weights</a>.</p>
+  </section>
+
+  <section>
+
+    <pre>
+      ## 5. Base de données MySQL
+
+```sql
+CREATE DATABASE face_demo;
+USE face_demo;
+
+CREATE TABLE users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  face_descriptor TEXT
+);
+```
+    </pre>
+    <h2>3. Backend - Node.js + Express</h2>
+    <p>Installer les dépendances :</p>
+    <pre>
+npm init -y
+npm install express cors mysql2 nodemon
+    </pre>
+    <p>Code du serveur backend (<code>backend/app.js</code>) :</p>
+    <pre>
+import express from "express";
+import cors from "cors";
+import mysql from "mysql2/promise";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const db = await mysql.createConnection({
+  host: "localhost",
+  user: "phpmyadmin",
+  password: "nokia",
+  database: "face_demo",
+});
+
+function euclideanDistance(d1, d2) {
+  let sum = 0;
+  for (let i = 0; i &lt; d1.length; i++) {
+    sum += (d1[i] - d2[i]) ** 2;
+  }
+  return Math.sqrt(sum);
+}
+
+app.post("/register", async (req, res) =&gt; {
+  const { descriptor } = req.body;
+  if (!descriptor) return res.status(400).json({ success: false, message: "Descriptor manquant" });
+  await db.query("INSERT INTO users (face_descriptor) VALUES (?)", [JSON.stringify(descriptor)]);
+  res.json({ success: true });
+});
+
+app.post("/login", async (req, res) =&gt; {
+  const { descriptor } = req.body;
+  if (!descriptor) return res.status(400).json({ success: false, message: "Descriptor manquant" });
+
+  const [users] = await db.query("SELECT * FROM users");
+  const THRESHOLD = 0.6;
+  const found = users.find(user =&gt; {
+    const stored = JSON.parse(user.face_descriptor);
+    return euclideanDistance(stored, descriptor) &lt; THRESHOLD;
+  });
+
+  if (found) return res.json({ success: true });
+  res.status(401).json({ success: false });
+});
+
+app.listen(4000, () =&gt; console.log("Backend lancé sur http://localhost:4000"));
+    </pre>
+    <div class="note">
+       Assurez-vous que la base MySQL <code>face_demo</code> existe et contient la table <code>users</code> avec la colonne <code>face_descriptor</code>.
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Frontend - React + Face API</h2>
+    <p>Créer le projet frontend avec Vite :</p>
+    <pre>
+npm create vite@latest frontend -- --template react
+cd frontend
+npm install
+npm install axios face-api.js react-router-dom
+    </pre>
+
+    <h3>4.1 API Axios</h3>
+    <pre>
+import axios from "axios";
+
+const api = axios.create({
+  baseURL: "http://localhost:4000",
+  headers: { "Content-Type": "application/json" },
+});
+
+export default api;
+    </pre>
+
+    <h3>4.2 Composant Register</h3>
+    <pre>
+import { useRef, useEffect } from "react";
+import * as faceapi from "face-api.js";
+import api from "../api/api";
+
+export default function Register() {
+  const videoRef = useRef();
+
+  useEffect(() =&gt; {
+    const startVideo = async () =&gt; {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+      videoRef.current.srcObject = stream;
+    };
+    startVideo();
+  }, []);
+
+  const register = async () =&gt; {
+    await faceapi.nets.ssdMobilenetv1.loadFromUri("/models");
+    await faceapi.nets.faceRecognitionNet.loadFromUri("/models");
+    await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
+
+    const detection = await faceapi
+      .detectSingleFace(videoRef.current)
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+
+    if (!detection) return alert("Aucun visage détecté");
+    await api.post("/register", { descriptor: detection.descriptor });
+    alert("Visage enregistré");
+  };
+
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;Register&lt;/h2&gt;
+      &lt;video ref={videoRef} autoPlay muted width="320" height="240" /&gt;
+      &lt;button onClick={register}&gt;Enregistrer visage&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}
+    </pre>
+
+    <h3>4.3 Composant Login</h3>
+    <pre>
+import { useRef, useEffect } from "react";
+import * as faceapi from "face-api.js";
+import { useNavigate } from "react-router-dom";
+import api from "../api/api";
+
+export default function Login() {
+  const videoRef = useRef();
+  const navigate = useNavigate();
+
+  useEffect(() =&gt; {
+    const startVideo = async () =&gt; {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+      videoRef.current.srcObject = stream;
+    };
+    startVideo();
+  }, []);
+
+  const login = async () =&gt; {
+    await faceapi.nets.ssdMobilenetv1.loadFromUri("/models");
+    await faceapi.nets.faceRecognitionNet.loadFromUri("/models");
+    await faceapi.nets.faceLandmark68Net.loadFromUri("/models");
+
+    const detection = await faceapi
+      .detectSingleFace(videoRef.current)
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+
+    if (!detection) return alert("Aucun visage détecté");
+    try {
+      await api.post("/login", { descriptor: detection.descriptor });
+      navigate("/profile");
+    } catch {
+      alert("Visage non reconnu");
+    }
+  };
+
+  return (
+    &lt;div&gt;
+      &lt;h2&gt;Login&lt;/h2&gt;
+      &lt;video ref={videoRef} autoPlay muted width="320" height="240" /&gt;
+      &lt;button onClick={login}&gt;Se connecter&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}
+    </pre>
+
+    <h3>4.4 Composant Profile</h3>
+    <pre>
+import React from "react";
+
+const Profile = () =&gt; &lt;div&gt;&lt;h1&gt;Bienvenue sur le profil&lt;/h1&gt;&lt;/div&gt;;
+export default Profile;
+    </pre>
+
+    <h3>4.5 Routing App.jsx</h3>
+    <pre>
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Register from "./auth/Register";
+import Login from "./auth/Login";
+import Profile from "./dashboard/Profile";
+
+export default function App() {
+  return (
+    &lt;BrowserRouter&gt;
+      &lt;Routes&gt;
+        &lt;Route path="/" element={&lt;Register /&gt;} /&gt;
+        &lt;Route path="/login" element={&lt;Login /&gt;} /&gt;
+        &lt;Route path="/profile" element={&lt;Profile /&gt;} /&gt;
+      &lt;/Routes&gt;
+    &lt;/BrowserRouter&gt;
+  );
+}
+    </pre>
+  </section>
+
+  <section>
+    <h2>5. Lancement du projet</h2>
+    <ul>
+      <li>Lancer le backend : <code>cd backend &amp;&amp; npm run dev</code></li>
+      <li>Lancer le frontend : <code>cd frontend &amp;&amp; npm run dev</code></li>
+      <li>Ouvrir <code>http://localhost:5173</code> dans le navigateur</li>
+    </ul>
+    <div class="note">
+       Testez l'inscription et la connexion avec votre webcam pour vérifier que la reconnaissance faciale fonctionne.
+    </div>
+  </section>
+
+</main>
+
+</body>
+</html>
